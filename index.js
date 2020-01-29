@@ -1,28 +1,31 @@
-const getPort = require("get-port");
 const http = require("http");
-const tempy = require("tempy");
-const rimraf = require("rimraf");
-const util = require("util");
+const {promisify} = require("util");
 const sitemapGenerator = require("sitemap-generator");
-const fs = require("fs");
 const {spawn} = require("child_process");
 const multer = require("multer");
+const fs = require("fs").promises;
+const os = require("os");
+const path = require("path");
 
-const withTempFile = async (fn) => {
-	const file = tempy.file();
-	try {
-		return await fn(file);
-	}finally {
-		await util.promisify(rimraf)(file);
-	}
+const getPermissions = async (path) => {
+	const stats = await fs.stat(path);
+	return "0" + (stats.mode & parseInt("777", 8)).toString(8);
 };
 
+const withTempFile = (fn) => withTempDir((dir) => fn(path.join(dir, "file")));
+
+const withTempDirProm = (fn) => fs.realpath(os.tmpdir())
+	.then((tmp) => fs.mkdtemp(tmp + path.sep))
+	.then((dir) => fn(dir)
+		.finally(() => fs.rmdir(dir, {recursive: true}))
+	);
+
 const withTempDir = async (fn) => {
-	const dir = tempy.directory();
+	const dir = await fs.mkdtemp(await fs.realpath(os.tmpdir()) + path.sep);
 	try {
 		return await fn(dir);
 	}finally {
-		await util.promisify(rimraf)(dir);
+		fs.rmdir(dir, {recursive: true});
 	}
 };
 
@@ -39,7 +42,7 @@ const getSitemap = async () => {
 			generator.start();
 		});
 
-		return await util.promisify(fs.readFile)(file, "utf8");
+		return await fs.readFile(file, "utf8");
 	});
 };
 
@@ -58,8 +61,8 @@ const pdfToImage = async (pdf) => {
 			});
 		});
 
-		const files = await util.promisify(fs.readdir)(tmpDir);
-		return Promise.all(files.sort(new Intl.Collator(undefined, {numeric: true}).compare).map((filename) => util.promisify(fs.readFile)(`${tmpDir}/${filename}`)));
+		const files = await fs.readdir(tmpDir);
+		return Promise.all(files.sort(new Intl.Collator(undefined, {numeric: true}).compare).map((filename) => fs.readFile(`${tmpDir}/${filename}`)));
 	});
 };
 
@@ -95,7 +98,7 @@ const app = http.createServer(async (req, res) => {
 			res.writeHead(200);
 			res.end(sitemap);
 		}else if (path === "/pdf_1.png" && req.method === "POST") {
-			await util.promisify(multer({storage: multer.memoryStorage()}).single("pdf"))(req, res);
+			await promisify(multer({storage: multer.memoryStorage()}).single("pdf"))(req, res);
 			const pdf = req.file.buffer;
 			const images = await pdfToImage(pdf);
 
